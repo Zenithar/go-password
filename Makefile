@@ -28,7 +28,7 @@ docs:
 		-I ${GOPATH}/src/github.com/grpc-ecosystem/grpc-gateway/third_party/googleapis \
 		--swagger_out=logtostderr=true:./protocol/docs \
 		./protocol/password.proto
-	bootprint openapi ./protocol/docs/*.swagger.json ./protocol/docs/
+	#bootprint openapi ./protocol/docs/*.swagger.json ./protocol/docs/
 
 proto:
 	@mkdir -p ./protocol/password
