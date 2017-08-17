@@ -26,7 +26,7 @@ docs:
 	@protoc -I /usr/local/include -I ./protocol/ \
 		-I ${GOPATH}/src \
 		-I ${GOPATH}/src/github.com/grpc-ecosystem/grpc-gateway/third_party/googleapis \
-		--swagger_out=logtostderr=true:./protocol/docs \
+		--swagger_out=logtostderr=true:./protocol/password \
 		./protocol/password.proto
 	#bootprint openapi ./protocol/docs/*.swagger.json ./protocol/docs/
 

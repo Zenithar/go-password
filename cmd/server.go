@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -31,7 +32,7 @@ import (
 // serveCmd represents the serve command
 var serveCmd = &cobra.Command{
 	Use:   "server",
-	Short: "Launches the server on https://localhost:5555",
+	Short: "Launches the server on http://localhost:5555",
 	Run: func(cmd *cobra.Command, args []string) {
 		serve()
 	},
@@ -122,16 +123,16 @@ func newServer() *myService {
 
 func prepareGRPC() (*grpc.Server, error) {
 	// gRPC Server settings
-	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(
-			grpc_middleware.ChainUnaryServer(
-				grpc_opentracing.UnaryServerInterceptor(),
-				grpc_prometheus.UnaryServerInterceptor,
-				// Should always be the last
-				panichandler.UnaryPanicHandler,
-			),
+	var sopts []grpc.ServerOption
+	sopts = append(sopts, grpc.UnaryInterceptor(
+		grpc_middleware.ChainUnaryServer(
+			grpc_opentracing.UnaryServerInterceptor(),
+			grpc_prometheus.UnaryServerInterceptor,
+			// Should always be the last
+			panichandler.UnaryPanicHandler,
 		),
-	)
+	))
+	grpcServer := grpc.NewServer(sopts...)
 
 	// Password service
 	pb.RegisterPasswordServer(grpcServer, newServer())
@@ -153,6 +154,11 @@ func prepareGRPC() (*grpc.Server, error) {
 func prepareHTTP() (*http.Server, error) {
 	// Assign a HTTP router
 	router := http.NewServeMux()
+
+	// Swagger
+	router.HandleFunc("/swagger.json", func(w http.ResponseWriter, req *http.Request) {
+		io.Copy(w, strings.NewReader(pb.Swagger))
+	})
 
 	// Metrics endpoint
 	router.Handle("/metrics", prometheus.Handler())
@@ -184,7 +190,9 @@ func prepareHTTP() (*http.Server, error) {
 
 	// gRPC Gateway settings
 	ctx := context.Background()
-	dopts := []grpc.DialOption{grpc.WithInsecure()}
+	dopts := []grpc.DialOption{grpc.WithTimeout(3 * time.Second), grpc.WithBlock()}
+	dopts = append(dopts, grpc.WithInsecure())
+
 	gwmux := runtime.NewServeMux()
 
 	// Register Gateway endpoints
