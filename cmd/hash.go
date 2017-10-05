@@ -4,11 +4,9 @@ import (
 	"context"
 	"os"
 	"strings"
-	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/grpclog"
 
 	pb "go.zenithar.org/password/protocol/password"
 )
@@ -17,26 +15,22 @@ var hashCmd = &cobra.Command{
 	Use:   "hash",
 	Short: "hash the given password",
 	Run: func(cmd *cobra.Command, args []string) {
-		// gRPC dialup options
-		var opts []grpc.DialOption
-		opts = append(opts, grpc.WithTimeout(3*time.Second))
-		opts = append(opts, grpc.WithBlock())
-		opts = append(opts, grpc.WithInsecure())
+		ctx := context.Background()
 
-		// Initialize connection
-		conn, err := grpc.Dial("localhost:5555", opts...)
-		if err != nil {
-			grpclog.Fatalf("fail to dial: %v", err)
-		}
+		conn := grpcClientConnection(ctx, "localhost:5555")
 		defer conn.Close()
 
 		// Client stub
 		client := pb.NewPasswordClient(conn)
 
 		// Do the call
-		res, _ := client.Encode(context.Background(), &pb.PasswordReq{
+		res, err := client.Encode(ctx, &pb.PasswordReq{
 			Password: strings.Join(os.Args[2:], " "),
 		})
+		if err != nil {
+			logrus.WithError(err).Fatal("Unable to do the gRPC call")
+		}
+
 		println(res.Hash)
 	},
 }

@@ -25,6 +25,6 @@ ldflags="
   -s"
 
 echo " >   server"
-go build -buildmode=pie -ldflags "${ldflags}" -o bin/password${ext} ${repo_path}
+go build -a -buildmode=pie -ldflags "${ldflags}" -o bin/password${ext} ${repo_path}
 
 exit 0

@@ -2,15 +2,7 @@ syntax = "proto3";
 
 package password;
 
-import "github.com/gogo/protobuf/gogoproto/gogo.proto";
-
-option (gogoproto.marshaler_all) = true;
-option (gogoproto.unmarshaler_all) = true;
-option (gogoproto.sizer_all) = true;
-option (gogoproto.populate_all) = true;
-option (gogoproto.equal_all) = true;
-option (gogoproto.testgen_all) = true;
-option (gogoproto.benchgen_all) = true;
+import "google/protobuf/timestamp.proto";
 
 message Error {
   int32 code = 1;
@@ -32,4 +24,8 @@ message EncodedPasswordRes {
 message PasswordValidationRes {
   Error error = 1;
   bool valid = 2;
+}
+
+message PongRes {
+  google.protobuf.Timestamp timestamp = 1;
 }

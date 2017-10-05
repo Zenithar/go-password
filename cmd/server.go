@@ -1,248 +1,108 @@
 package cmd
 
 import (
-	"fmt"
-	"io"
-	"log"
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"errors"
 	"net"
-	"net/http"
-	"strings"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/cockroachdb/cmux"
-	"github.com/grpc-ecosystem/go-grpc-middleware"
-	"github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
-	"github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
-	panichandler "github.com/kazegusuri/grpc-panic-handler"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/spf13/cobra"
-	"go.zenithar.org/butcher"
-	"go.zenithar.org/common/web/utils"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
+	"go.zenithar.org/password/server"
 
-	pb "go.zenithar.org/password/protocol/password"
-	"go.zenithar.org/password/version"
+	"github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
 
 // serveCmd represents the serve command
 var serveCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Launches the server on http://localhost:5555",
-	Run: func(cmd *cobra.Command, args []string) {
-		serve()
-	},
+	RunE:  serve,
 }
 
 func init() {
 	RootCmd.AddCommand(serveCmd)
 }
 
-// -----------------------------------------------------------------------------
+func serve(cmd *cobra.Command, args []string) error {
 
-type myService struct {
-	butch *butcher.Butcher
-}
+	// Signal
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
-func (m *myService) Encode(c context.Context, s *pb.PasswordReq) (*pb.EncodedPasswordRes, error) {
-	res := &pb.EncodedPasswordRes{}
+	errCh := make(chan error, 1)
 
-	// Check mandatory fields
-	if len(strings.TrimSpace(s.Password)) == 0 {
-		res.Error = &pb.Error{
-			Code:    http.StatusPreconditionFailed,
-			Message: "Password value is mandatory !",
-		}
-		return res, nil
-	}
-
-	// Hash given password
-	passwd, err := m.butch.Hash([]byte(s.Password))
-	if err != nil {
-		res.Error = &pb.Error{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		}
-		return res, nil
-	}
-
-	// Return the result
-	res.Hash = passwd
-
-	return res, nil
-}
-
-func (m *myService) Validate(c context.Context, s *pb.PasswordReq) (*pb.PasswordValidationRes, error) {
-	res := &pb.PasswordValidationRes{}
-
-	// Check mandatory fields
-	if len(strings.TrimSpace(s.Password)) == 0 {
-		res.Error = &pb.Error{
-			Code:    http.StatusPreconditionFailed,
-			Message: "Password value is mandatory !",
-		}
-		return res, nil
-	}
-
-	if len(strings.TrimSpace(s.Hash)) == 0 {
-		res.Error = &pb.Error{
-			Code:    http.StatusPreconditionFailed,
-			Message: "Hash value is mandatory !",
-		}
-		return res, nil
-	}
-
-	// Hash given password
-	valid, err := butcher.Verify([]byte(s.Hash), []byte(s.Password))
-	if err != nil {
-		res.Error = &pb.Error{
-			Code:    http.StatusBadRequest,
-			Message: err.Error(),
-		}
-		return res, nil
-	}
-
-	// Return result
-	res.Valid = valid
-
-	return res, nil
-}
-
-func newServer() *myService {
-	butch, _ := butcher.New()
-	return &myService{
-		butch: butch,
-	}
-}
-
-// -----------------------------------------------------------------------------
-
-func prepareGRPC() (*grpc.Server, error) {
-	// gRPC Server settings
-	var sopts []grpc.ServerOption
-	sopts = append(sopts, grpc.UnaryInterceptor(
-		grpc_middleware.ChainUnaryServer(
-			grpc_opentracing.UnaryServerInterceptor(),
-			grpc_prometheus.UnaryServerInterceptor,
-			// Should always be the last
-			panichandler.UnaryPanicHandler,
-		),
-	))
-	grpcServer := grpc.NewServer(sopts...)
-
-	// Password service
-	pb.RegisterPasswordServer(grpcServer, newServer())
-
-	// Prometheus
-	grpc_prometheus.Register(grpcServer)
-
-	// Health
-	healthServer := health.NewServer()
-	healthpb.RegisterHealthServer(grpcServer, healthServer)
-	healthServer.SetServingStatus("Password", healthpb.HealthCheckResponse_SERVING)
-
-	// Reflection
-	reflection.Register(grpcServer)
-
-	return grpcServer, nil
-}
-
-func prepareHTTP() (*http.Server, error) {
-	// Assign a HTTP router
-	router := http.NewServeMux()
-
-	// Swagger
-	router.HandleFunc("/swagger.json", func(w http.ResponseWriter, req *http.Request) {
-		io.Copy(w, strings.NewReader(pb.Swagger))
-	})
-
-	// Metrics endpoint
-	router.Handle("/metrics", prometheus.Handler())
-
-	// Health monitoring endpoint
-	router.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		utils.JSONResponse(w, http.StatusOK, map[string]interface{}{
-			"status":    "OK",
-			"timestamp": time.Now().UTC().Unix(),
-		})
-	})
-
-	// Service discovery
-	router.HandleFunc("/.well-known/finger", func(w http.ResponseWriter, r *http.Request) {
-		utils.JSONResponse(w, http.StatusOK, map[string]interface{}{
-			"service-name":        "Password",
-			"service-description": "Remote password hasher",
-			"version":             version.Version,
-			"version-full":        fmt.Sprintf("%s (%s-%s)", version.Version, version.Revision, version.Branch),
-			"revision":            version.Revision,
-			"branch":              version.Branch,
-			"build_date":          version.BuildDate,
-			"swagger_doc_url":     "/swagger.json",
-			"healthz_url":         "/healthz",
-			"metric_url":          "/metrics",
-			"endpoints":           []string{"grpc", "http"},
-		})
-	})
-
-	// gRPC Gateway settings
-	ctx := context.Background()
-	dopts := []grpc.DialOption{grpc.WithTimeout(3 * time.Second), grpc.WithBlock()}
-	dopts = append(dopts, grpc.WithInsecure())
-
-	gwmux := runtime.NewServeMux()
-
-	// Register Gateway endpoints
-	err := pb.RegisterPasswordHandlerFromEndpoint(ctx, gwmux, "localhost:5555", dopts)
-	if err != nil {
-		return nil, err
-	}
-
-	// Assign to router
-	router.Handle("/", gwmux)
-
-	// Return HTTP Server instance
-	return &http.Server{
-		Handler: router,
-	}, nil
-}
-
-func serve() {
 	// Initialize listener
 	conn, err := net.Listen("tcp", ":5555")
 	if err != nil {
 		panic(err)
 	}
+	defer conn.Close()
 
-	// Create the connection muxer
-	mux := cmux.New(conn)
-
-	// Connection dispatcher rules
-	grpcL := mux.Match(cmux.HTTP2HeaderField("content-type", "application/grpc"))
-	httpL := mux.Match(cmux.HTTP1Fast())
-
-	// Create protocol servers
-
-	// gRPC
-	grpcServer, err := prepareGRPC()
-	if err != nil {
-		log.Fatalf("Unable to create gRPC server : %s", err.Error())
+	// Initialize TLS listener
+	config := &tls.Config{
+		Certificates: []tls.Certificate{
+			mustLoadX509KeyPair("./certs/server.ecdsa.crt", "./certs/server.ecdsa.key"),
+			mustLoadX509KeyPair("./certs/server.rsa.crt", "./certs/server.rsa.key"),
+		},
+		Rand:       rand.Reader,
+		NextProtos: []string{},
+		MinVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305, // Go 1.8 only
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,   // Go 1.8 only
+		},
+		PreferServerCipherSuites: true,
+		CurvePreferences: []tls.CurveID{
+			tls.CurveP384,
+			tls.X25519,
+		},
 	}
 
-	// HTTP
-	httpServer, err := prepareHTTP()
-	if err != nil {
-		log.Fatalf("Unable to create HTTP server : %s", err.Error())
+	tlsL := tls.NewListener(conn, config)
+
+	// Instanciate the server
+	s := server.New("localhost:5555", tlsL)
+
+	// Server
+	go func() {
+		if err := func() error {
+			// Start server
+			if err := s.Start(); err != nil {
+				return err
+			}
+			return nil
+		}(); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		logrus.WithError(err).Error("Server failed to start")
+		os.Exit(1)
+	case sig := <-signalCh:
+		logrus.Infof("Signal received '%s'", sig)
 	}
 
-	// Start all muxed listeners
-	go grpcServer.Serve(grpcL)
-	go httpServer.Serve(httpL)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	if err := mux.Serve(); err != nil {
-		log.Fatalf("Unable to serve services, %s", err.Error())
+	stopped := make(chan struct{}, 1)
+	go s.Shutdown(ctx, stopped)
+	select {
+	case <-ctx.Done():
+		logrus.Warn("time limit reached, initiating hard shutdown")
+		return errors.New("Server is failed")
+	case <-stopped:
+		logrus.Info("server shutdown completed")
+		break
 	}
+	return nil
 }

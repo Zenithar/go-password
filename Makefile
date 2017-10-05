@@ -8,12 +8,6 @@ get:
 	go get -u -v github.com/kardianos/govendor
 	# proto
 	go get -u -v github.com/golang/protobuf/protoc-gen-go
-	# gogoproto
-	go get -u -v github.com/gogo/protobuf/proto
-	go get -u -v github.com/gogo/protobuf/protoc-gen-gogo
-	go get -u -v github.com/gogo/protobuf/gogoproto
-	go get -u -v github.com/gogo/protobuf/protoc-gen-gogoslick
-	go get -u -v github.com/gogo/protobuf/protoc-gen-gogofast
 	# grpc-gateway
 	go get -u github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway
 	go get -u github.com/grpc-ecosystem/grpc-gateway/protoc-gen-swagger
@@ -37,7 +31,7 @@ proto:
 	@protoc -I ./protocol/ -I /usr/local/include \
 	 			 -I ${GOPATH}/src \
 				 -I ${GOPATH}/src/github.com/grpc-ecosystem/grpc-gateway/third_party/googleapis \
-				 --gogofast_out=plugins=grpc:./protocol/password \
+				 --go_out=plugins=grpc:./protocol/password \
 				 ./protocol/*.proto
 	@echo " >   gateway"
 	@protoc -I ./protocol/ -I /usr/local/include \
