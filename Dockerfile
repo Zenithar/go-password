@@ -7,7 +7,6 @@ COPY entrypoint.sh /
 RUN apk add --no-cache su-exec tini \
     && chmod +x /usr/bin/password_server \
     && chmod +x /entrypoint.sh \
-    && addgroup tokenizr \
     && adduser -s /bin/false -G nogroup -S -D nobody
 
 EXPOSE     5555
